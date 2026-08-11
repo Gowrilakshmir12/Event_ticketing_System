@@ -481,6 +481,17 @@ python manage.py makemigrations
 python manage.py migrate
 ```
 
+## Database Seeding
+
+The project provides a custom Django management command to populate the database with sample data for development and testing.
+
+### Seed the Database
+
+After running the database migrations, execute:
+
+```bash
+python manage.py seed_data
+
 ## Start the Development Server
 
 ```bash
