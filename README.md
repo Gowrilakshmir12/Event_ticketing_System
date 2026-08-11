@@ -247,7 +247,7 @@ and 1,000 users simultaneously request one ticket:
 Concurrent requests:        1000
 Successful reservations:      10
 Rejected reservations:       990
-Overselling:                    0
+Overselling:                   0
 Final available inventory:     0
 ```
 
