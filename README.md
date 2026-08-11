@@ -226,7 +226,7 @@ The lock is applied to the **specific event's inventory row**, not the entire in
 For example:
 
 ```text
-Event 1 Inventory → 🔒
+Event 1 Inventory → Locked
 Event 2 Inventory → Available
 Event 3 Inventory → Available
 ```
