@@ -1,0 +1,185 @@
+{% extends "tickets/base.html" %}
+{% block content %}
+<h2>{{ event.name }}</h2>
+<p class="text-muted">{{ event.event_date }}</p>
+<p>{{ event.description }}</p>
+
+<div id="availability" class="mb-3">
+  <span class="badge bg-info ticket-badge">
+    <span id="available-count">{{ event.inventory.available_tickets }}</span> / {{ event.inventory.total_tickets }} available
+  </span>
+</div>
+
+<div id="reserve-panel">
+  <div class="mb-3 col-md-3">
+    <label class="form-label">Quantity</label>
+    <input type="number" id="quantity" class="form-control" value="1" min="1">
+  </div>
+  <button id="reserve-btn" class="btn btn-primary">Reserve Tickets</button>
+</div>
+
+<div id="hold-panel" class="alert alert-warning mt-3">
+  <p>Hold created for <span id="hold-quantity"></span> ticket(s).</p>
+  <p>Time remaining: <span id="countdown"></span></p>
+  <button id="confirm-btn" class="btn btn-success">Confirm Purchase</button>
+</div>
+
+<div id="message" class="mt-3"></div>
+
+<script>
+const EVENT_ID = {{ event.id }};
+const CSRF_TOKEN = "{{ csrf_token }}";
+
+// Simple "guest identity" since auth is out of scope for this project —
+// persists per browser so the same visitor is treated as one user.
+let userId = localStorage.getItem('guest_user_id');
+if (!userId) {
+  userId = Math.floor(Math.random() * 1000000);
+  localStorage.setItem('guest_user_id', userId);
+}
+
+let currentHold = null;
+let confirmKey = null;
+let countdownTimer = null;
+let waitlistPollTimer = null;
+
+// On page load, check if this user already has an active waitlist entry
+// for this event (covers the case where the page was reloaded, or the
+// tab was closed and reopened, after joining the waitlist).
+let myWaitlistId = localStorage.getItem(`waitlist_${EVENT_ID}`);
+if (myWaitlistId) {
+  checkExistingWaitlistEntry(myWaitlistId);
+}
+
+async function checkExistingWaitlistEntry(waitlistId) {
+  const res = await fetch(`/api/waitlist/${waitlistId}/status/`);
+  if (res.status !== 200) return;
+  const data = await res.json();
+
+  if (data.status === 'FULFILLED' && data.hold) {
+    localStorage.removeItem(`waitlist_${EVENT_ID}`);
+    currentHold = { hold_id: data.hold.hold_id, quantity: data.hold.quantity };
+    confirmKey = crypto.randomUUID();
+    document.getElementById('reserve-panel').style.display = 'none';
+    document.getElementById('hold-panel').style.display = 'block';
+    document.getElementById('hold-quantity').innerText = data.hold.quantity;
+    startCountdown(data.hold.expires_at);
+    showMessage('🎉 Tickets became available! Confirm within the time limit.', 'success');
+  } else if (data.status === 'WAITING') {
+    showMessage(`You're still on the waitlist. Waitlist ID: ${waitlistId}`, 'info');
+    startWaitlistPolling(waitlistId);
+  }
+}
+
+function showMessage(text, type = 'info') {
+  document.getElementById('message').innerHTML =
+    `<div class="alert alert-${type}">${text}</div>`;
+}
+
+async function refreshAvailability() {
+  const res = await fetch(`/api/events/${EVENT_ID}/inventory/`);
+  const data = await res.json();
+  document.getElementById('available-count').innerText = data.available_tickets;
+}
+
+document.getElementById('reserve-btn').addEventListener('click', async () => {
+  const quantity = parseInt(document.getElementById('quantity').value, 10);
+
+  const res = await fetch(`/api/events/${EVENT_ID}/holds/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, quantity: quantity }),
+  });
+  const data = await res.json();
+
+  if (res.status === 201) {
+    currentHold = data;
+    confirmKey = crypto.randomUUID();
+    document.getElementById('reserve-panel').style.display = 'none';
+    document.getElementById('hold-panel').style.display = 'block';
+    document.getElementById('hold-quantity').innerText = data.quantity;
+    startCountdown(data.expires_at);
+    refreshAvailability();
+    showMessage('Tickets held! Confirm within 5 minutes.', 'warning');
+  } else {
+    showMessage(
+      `Not enough tickets available: ${data.detail} <button id="waitlist-btn" class="btn btn-sm btn-outline-secondary ms-2">Join Waitlist Instead</button>`,
+      'danger'
+    );
+    document.getElementById('waitlist-btn').addEventListener('click', () => joinWaitlist(quantity));
+  }
+});
+
+document.getElementById('confirm-btn').addEventListener('click', async () => {
+  const res = await fetch(`/api/holds/${currentHold.hold_id}/confirm/`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': confirmKey },
+  });
+  const data = await res.json();
+
+  if (res.status === 200) {
+    clearInterval(countdownTimer);
+    document.getElementById('hold-panel').style.display = 'none';
+    showMessage(`✅ Purchase confirmed! Purchase ID: ${data.purchase_id}`, 'success');
+  } else {
+    showMessage(`Could not confirm: ${data.detail}`, 'danger');
+  }
+});
+
+async function joinWaitlist(quantity) {
+  const res = await fetch(`/api/events/${EVENT_ID}/waitlist/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, quantity: quantity }),
+  });
+  const data = await res.json();
+  if (res.status === 201) {
+    localStorage.setItem(`waitlist_${EVENT_ID}`, data.waitlist_id);
+    showMessage(`You're on the waitlist. We'll notify you here if tickets open up. Waitlist ID: ${data.waitlist_id}`, 'info');
+    startWaitlistPolling(data.waitlist_id);
+  }
+}
+
+function startWaitlistPolling(waitlistId) {
+  waitlistPollTimer = setInterval(async () => {
+    const res = await fetch(`/api/waitlist/${waitlistId}/status/`);
+    const data = await res.json();
+
+    if (data.status === 'FULFILLED' && data.hold) {
+      clearInterval(waitlistPollTimer);
+      localStorage.removeItem(`waitlist_${EVENT_ID}`);   // <-- add this line
+      currentHold = { hold_id: data.hold.hold_id, quantity: data.hold.quantity };
+      confirmKey = crypto.randomUUID();
+      document.getElementById('reserve-panel').style.display = 'none';
+      document.getElementById('hold-panel').style.display = 'block';
+      document.getElementById('hold-quantity').innerText = data.hold.quantity;
+      startCountdown(data.hold.expires_at);
+      showMessage('🎉 Tickets became available! Confirm within the time limit.', 'success');
+    }
+  }, 5000);
+}
+
+function startCountdown(expiresAtISO) {
+  const expiresAt = new Date(expiresAtISO).getTime();
+  countdownTimer = setInterval(async () => {
+    const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+    const mins = Math.floor(remaining / 60);
+    const secs = remaining % 60;
+    document.getElementById('countdown').innerText = `${mins}:${secs.toString().padStart(2, '0')}`;
+
+    if (remaining <= 0) {
+      clearInterval(countdownTimer);
+      // Give the backend expiry worker a moment to actually process it,
+      // then refresh availability from the real source of truth.
+      setTimeout(async () => {
+        await refreshAvailability();
+        document.getElementById('hold-panel').style.display = 'none';
+        document.getElementById('reserve-panel').style.display = 'block';
+        showMessage('⏰ Hold expired. Tickets released back to inventory.', 'secondary');
+      }, 2000);
+    }
+  }, 1000);
+}
+setInterval(refreshAvailability, 10000);
+</script>
+{% endblock %}

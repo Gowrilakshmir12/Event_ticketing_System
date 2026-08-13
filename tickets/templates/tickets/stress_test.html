@@ -1,0 +1,136 @@
+{% extends "tickets/base.html" %}
+{% block content %}
+<h2 class="mb-4">🧪 Concurrency Stress Test</h2>
+<p class="text-muted">
+  Fires many simultaneous ticket-hold requests from your browser at a single event,
+  to demonstrate the system never oversells tickets under real concurrent load.
+</p>
+
+<div class="row mb-4">
+  <div class="col-md-4">
+    <label class="form-label">Event</label>
+    <select id="event-select" class="form-select">
+      {% for event in events %}
+      <option value="{{ event.id }}" data-available="{{ event.inventory.available_tickets }}">
+        {{ event.name }} ({{ event.inventory.available_tickets }} available)
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label class="form-label">Concurrent Requests</label>
+    <input type="number" id="concurrency" class="form-control" value="20" min="1" max="500">
+  </div>
+  <div class="col-md-3">
+    <label class="form-label">Tickets per Request</label>
+    <input type="number" id="qty-per-request" class="form-control" value="1" min="1">
+  </div>
+  <div class="col-md-2 d-flex align-items-end">
+    <button id="run-btn" class="btn btn-danger w-100">🔥 Fire Requests</button>
+  </div>
+</div>
+
+<div id="status"></div>
+
+<div id="results-panel" style="display:none;" class="mt-4">
+  <h4>Results</h4>
+  <table class="table table-bordered w-auto">
+    <tbody>
+      <tr><th>Starting available tickets</th><td id="r-starting"></td></tr>
+      <tr><th>Concurrent requests fired</th><td id="r-fired"></td></tr>
+      <tr><th class="text-success">Successful reservations</th><td id="r-success" class="text-success fw-bold"></td></tr>
+      <tr><th class="text-danger">Rejected (insufficient inventory)</th><td id="r-rejected" class="text-danger"></td></tr>
+      <tr><th>Errors</th><td id="r-errors"></td></tr>
+      <tr><th>Elapsed time</th><td id="r-elapsed"></td></tr>
+      <tr><th>Final available tickets</th><td id="r-final"></td></tr>
+    </tbody>
+  </table>
+  <div id="verdict"></div>
+</div>
+
+<script>
+const EVENT_INVENTORY_URL = (id) => `/api/events/${id}/inventory/`;
+const EVENT_HOLDS_URL = (id) => `/api/events/${id}/holds/`;
+
+document.getElementById('run-btn').addEventListener('click', async () => {
+  const eventId = document.getElementById('event-select').value;
+  const concurrency = parseInt(document.getElementById('concurrency').value, 10);
+  const quantity = parseInt(document.getElementById('qty-per-request').value, 10);
+
+  const runBtn = document.getElementById('run-btn');
+  runBtn.disabled = true;
+  runBtn.innerText = 'Firing...';
+  document.getElementById('status').innerHTML =
+    `<div class="alert alert-info">Firing ${concurrency} simultaneous requests at event ${eventId}...</div>`;
+  document.getElementById('results-panel').style.display = 'none';
+
+  // Get starting inventory
+  const startRes = await fetch(EVENT_INVENTORY_URL(eventId));
+  const startData = await startRes.json();
+  const startingAvailable = startData.available_tickets;
+
+  // Build all request promises WITHOUT awaiting any of them individually —
+  // this is what makes them genuinely concurrent, not sequential.
+  const startTime = performance.now();
+  const requestPromises = [];
+  for (let i = 0; i < concurrency; i++) {
+    const fakeUserId = 900000 + Math.floor(Math.random() * 100000) + i;
+    requestPromises.push(
+      fetch(EVENT_HOLDS_URL(eventId), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: fakeUserId, quantity: quantity }),
+      }).then(res => res.json().then(data => ({ status: res.status, data })))
+        .catch(err => ({ status: 0, error: err.toString() }))
+    );
+  }
+
+  // Fire them all at once
+  const results = await Promise.all(requestPromises);
+  const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+
+  let success = 0, rejected = 0, errors = 0;
+  for (const r of results) {
+    if (r.status === 201) success++;
+    else if (r.status === 409) rejected++;
+    else errors++;
+  }
+
+  // Get final inventory
+  const endRes = await fetch(EVENT_INVENTORY_URL(eventId));
+  const endData = await endRes.json();
+
+  document.getElementById('r-starting').innerText = startingAvailable;
+  document.getElementById('r-fired').innerText = concurrency;
+  document.getElementById('r-success').innerText = success;
+  document.getElementById('r-rejected').innerText = rejected;
+  document.getElementById('r-errors').innerText = errors;
+  document.getElementById('r-elapsed').innerText = `${elapsed}s`;
+  document.getElementById('r-final').innerText = endData.available_tickets;
+
+  const expectedFinal = startingAvailable - (success * quantity);
+  const oversold = success * quantity > startingAvailable;
+  const inventoryCorrect = endData.available_tickets === expectedFinal;
+
+  let verdictHtml = '';
+  if (!oversold && inventoryCorrect) {
+    verdictHtml = `<div class="alert alert-success">
+      ✅ No overselling detected. Successful reservations (${success * quantity} tickets)
+      never exceeded starting availability (${startingAvailable}), and final inventory
+      matches expected value exactly.
+    </div>`;
+  } else {
+    verdictHtml = `<div class="alert alert-danger">
+      ❌ Something's wrong: oversold=${oversold}, inventory match=${inventoryCorrect}
+      (expected ${expectedFinal}, got ${endData.available_tickets})
+    </div>`;
+  }
+  document.getElementById('verdict').innerHTML = verdictHtml;
+
+  document.getElementById('status').innerHTML = '';
+  document.getElementById('results-panel').style.display = 'block';
+  runBtn.disabled = false;
+  runBtn.innerText = '🔥 Fire Requests';
+});
+</script>
+{% endblock %}

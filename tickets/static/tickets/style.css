@@ -1,0 +1,4 @@
+body { background: #f7f7f9; }
+.ticket-badge { font-size: 1.1rem; }
+#hold-panel { display: none; }
+#countdown { font-weight: bold; font-size: 1.3rem; }
