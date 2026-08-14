@@ -9,11 +9,14 @@
 </head>
 <body>
   <nav class="navbar navbar-dark bg-dark mb-4">
-    <div class="container">
-      <a class="navbar-brand" href="{% url 'event-list-page' %}">🎫 Event Ticketing</a>
+  <div class="container">
+    <a class="navbar-brand" href="{% url 'event-list-page' %}">🎫 Event Ticketing</a>
+    <div>
       <a class="btn btn-outline-light btn-sm" href="{% url 'event-create-page' %}">+ Create Event (Admin)</a>
+      <a class="btn btn-outline-danger btn-sm ms-2" href="{% url 'stress-test-page' %}">🧪 Stress Test</a>
     </div>
-  </nav>
+  </div>
+</nav>
   <div class="container pb-5">
     {% block content %}{% endblock %}
   </div>
